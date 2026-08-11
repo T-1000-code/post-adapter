@@ -40,6 +40,16 @@
             border-radius: 8px;
             white-space: pre-wrap;
         }
+        .result + .result {
+            margin-top: 0.75rem;
+        }
+        .result .thread-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #6b7280;
+            margin-bottom: 0.35rem;
+        }
         .errors {
             margin-top: 1rem;
             color: #b91c1c;
@@ -53,72 +63,78 @@
             margin-top: 1rem;
         }
         .buffer-btn:hover { background: #1f39cc; }
-        .platforms {
+        .media-field {
+            margin-top: 1rem;
+        }
+        .schedule-field {
             margin-top: 1rem;
             display: flex;
             flex-wrap: wrap;
+            align-items: center;
             gap: 1rem;
         }
-        .platforms label {
+        .schedule-field label {
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
         }
-        .warn {
-            color: #b91c1c;
-            font-size: 0.8rem;
-        }
-        .media-field {
-            margin-top: 1rem;
-        }
-        .buffer-results {
+        .buffer-result {
             margin-top: 1rem;
             padding: 1rem;
             background: #f3f4f6;
             border-radius: 8px;
         }
-        .buffer-results p { margin: 0.25rem 0; }
         .media-note {
             margin-top: 0.5rem;
             font-size: 0.9rem;
             color: #4b5563;
         }
+        .account-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 1rem;
+        }
+        .account-bar a { color: #1d9bf0; }
+        .account-bar button {
+            margin: 0;
+            padding: 0;
+            background: none;
+            border: none;
+            color: #6b7280;
+            font-size: 0.85rem;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .account-bar .connect-warn { color: #b91c1c; }
     </style>
 </head>
 <body>
-    <h1>Rewrite a post idea for X</h1>
+    <div class="account-bar">
+        <span>
+            {{ auth()->user()->email }} &middot;
+            @if ($bufferConnection && $bufferConnection->isConnected())
+                <a href="{{ route('buffer.show') }}">X: {{ $bufferConnection->channel_name }}</a>
+            @else
+                <a href="{{ route('buffer.show') }}" class="connect-warn">Connect your X account</a>
+            @endif
+        </span>
+        <form method="POST" action="{{ route('logout') }}">
+            @csrf
+            <button type="submit">Log out</button>
+        </form>
+    </div>
 
-    @php
-        $selectedPlatforms = old('platforms', $platforms ?? []);
-    @endphp
+    <h1>Rewrite a post idea for X</h1>
 
     <form method="POST" action="{{ route('post-idea.store') }}" enctype="multipart/form-data">
         @csrf
         <textarea name="idea" placeholder="Type your rough post idea here...">{{ $idea }}</textarea>
 
-        <div class="platforms">
-            <label>
-                <input type="checkbox" name="platforms[]" value="x" id="platform-x" {{ in_array('x', $selectedPlatforms) ? 'checked' : '' }}>
-                X
-            </label>
-            <label>
-                <input type="checkbox" name="platforms[]" value="facebook" id="platform-facebook" {{ in_array('facebook', $selectedPlatforms) ? 'checked' : '' }}>
-                Facebook
-            </label>
-            <label>
-                <input type="checkbox" name="platforms[]" value="instagram" id="platform-instagram" {{ in_array('instagram', $selectedPlatforms) ? 'checked' : '' }}>
-                Instagram
-                <span class="warn" id="warn-instagram"></span>
-            </label>
-            <label>
-                <input type="checkbox" name="platforms[]" value="tiktok" id="platform-tiktok" {{ in_array('tiktok', $selectedPlatforms) ? 'checked' : '' }}>
-                TikTok
-                <span class="warn" id="warn-tiktok"></span>
-            </label>
-        </div>
-
         <div class="media-field">
-            <label for="media-input">Image or video (required for Instagram/TikTok):</label><br>
+            <label for="media-input">Image or video (optional):</label><br>
             <input type="file" name="media" id="media-input" accept="image/jpeg,image/png,video/mp4">
         </div>
 
@@ -135,64 +151,81 @@
         </div>
     @endif
 
-    @if ($result)
-        <div class="result">
-            <strong>Rewritten post:</strong>
-            <p>{{ $result }}</p>
-        </div>
+    @if (! empty($posts))
+        @foreach ($posts as $index => $post)
+            <div class="result">
+                @if (count($posts) > 1)
+                    <span class="thread-label">Post {{ $index + 1 }} of {{ count($posts) }}</span>
+                @else
+                    <strong>Rewritten post:</strong>
+                @endif
+                <p>{{ $post }}</p>
+            </div>
+        @endforeach
 
         @if (! empty($mediaPath))
-            <p class="media-note">Attached {{ $mediaType }}: {{ basename($mediaPath) }}</p>
+            <p class="media-note">Attached {{ $mediaType }} (first post only): {{ basename($mediaPath) }}</p>
         @endif
 
         <form method="POST" action="{{ route('post-idea.buffer') }}">
             @csrf
-            <input type="hidden" name="text" value="{{ $result }}">
-            @foreach ($platforms ?? [] as $platform)
-                <input type="hidden" name="platforms[]" value="{{ $platform }}">
+            @foreach ($posts as $post)
+                <input type="hidden" name="posts[]" value="{{ $post }}">
             @endforeach
             @if (! empty($mediaPath))
                 <input type="hidden" name="media_path" value="{{ $mediaPath }}">
                 <input type="hidden" name="media_type" value="{{ $mediaType }}">
             @endif
-            <button type="submit" class="buffer-btn">Post to selected platforms via Buffer</button>
+
+            <div class="schedule-field">
+                <label>
+                    <input type="radio" name="schedule_choice" value="now" id="schedule-now" checked>
+                    Post now
+                </label>
+                <label>
+                    <input type="radio" name="schedule_choice" value="later" id="schedule-later">
+                    Schedule for later
+                </label>
+                <input type="datetime-local" name="scheduled_at" id="scheduled-at" disabled>
+            </div>
+
+            @error('scheduled_at')
+                <div class="errors"><p>{{ $message }}</p></div>
+            @enderror
+
+            <button type="submit" class="buffer-btn">{{ count($posts) > 1 ? 'Post thread to X via Buffer' : 'Post to X via Buffer' }}</button>
         </form>
 
-        @if (! empty($bufferResults))
-            <div class="buffer-results">
-                @foreach ($bufferResults as $line)
-                    <p>{{ $line }}</p>
-                @endforeach
+        @if (! empty($bufferResult))
+            <div class="buffer-result">
+                <p>{{ $bufferResult }}</p>
             </div>
         @endif
     @endif
 
     <script>
         (function () {
-            var mediaInput = document.getElementById('media-input');
-            var watched = ['instagram', 'tiktok'];
+            var scheduledAtInput = document.getElementById('scheduled-at');
+            var nowRadio = document.getElementById('schedule-now');
+            var laterRadio = document.getElementById('schedule-later');
 
-            function refreshWarnings() {
-                var hasFile = mediaInput.files && mediaInput.files.length > 0;
-
-                watched.forEach(function (platform) {
-                    var checkbox = document.getElementById('platform-' + platform);
-                    var warning = document.getElementById('warn-' + platform);
-
-                    if (checkbox.checked && !hasFile) {
-                        warning.textContent = '(requires image/video — none selected)';
-                    } else {
-                        warning.textContent = '';
-                    }
-                });
+            if (!scheduledAtInput) {
+                return;
             }
 
-            mediaInput.addEventListener('change', refreshWarnings);
-            watched.forEach(function (platform) {
-                document.getElementById('platform-' + platform).addEventListener('change', refreshWarnings);
-            });
+            var minLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+                .toISOString()
+                .slice(0, 16);
+            scheduledAtInput.min = minLocal;
 
-            refreshWarnings();
+            function refresh() {
+                scheduledAtInput.disabled = !laterRadio.checked;
+                scheduledAtInput.required = laterRadio.checked;
+            }
+
+            nowRadio.addEventListener('change', refresh);
+            laterRadio.addEventListener('change', refresh);
+            refresh();
         })();
     </script>
 </body>

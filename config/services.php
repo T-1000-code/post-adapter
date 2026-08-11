@@ -41,15 +41,7 @@ return [
     ],
 
     'buffer' => [
-        'token' => env('BUFFER_ACCESS_TOKEN'),
-        'profile_id' => env('BUFFER_PROFILE_ID'),
         'public_media_url' => env('PUBLIC_MEDIA_URL'),
-        'channels' => [
-            'x' => env('BUFFER_CHANNEL_X'),
-            'facebook' => env('BUFFER_CHANNEL_FACEBOOK'),
-            'instagram' => env('BUFFER_CHANNEL_INSTAGRAM'),
-            'tiktok' => env('BUFFER_CHANNEL_TIKTOK'),
-        ],
     ],
 
 ];

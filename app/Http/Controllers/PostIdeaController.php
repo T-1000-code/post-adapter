@@ -2,35 +2,25 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\BufferClient;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
 class PostIdeaController extends Controller
 {
-    /**
-     * Platforms whose posts are rejected by Buffer if no media is attached.
-     */
-    private const MEDIA_REQUIRED_PLATFORMS = ['instagram', 'tiktok'];
-
-    private const PLATFORM_LABELS = [
-        'x' => 'X',
-        'facebook' => 'Facebook',
-        'instagram' => 'Instagram',
-        'tiktok' => 'TikTok',
-    ];
-
-    public function create(): View
+    public function create(Request $request): View
     {
         return view('post-idea', [
             'idea' => old('idea', ''),
-            'result' => session('result'),
-            'platforms' => session('platforms', []),
+            'posts' => session('posts', []),
             'mediaPath' => session('mediaPath'),
             'mediaType' => session('mediaType'),
-            'bufferResults' => session('bufferResults', []),
+            'bufferResult' => session('bufferResult'),
+            'bufferConnection' => $request->user()->bufferConnection,
         ]);
     }
 
@@ -38,32 +28,8 @@ class PostIdeaController extends Controller
     {
         $validated = $request->validate([
             'idea' => ['required', 'string', 'max:2000'],
-            'platforms' => ['required', 'array', 'min:1'],
-            'platforms.*' => ['in:facebook,instagram,tiktok,x'],
-            'media' => ['nullable', 'file', 'max:51200'],
+            'media' => ['nullable', 'file', 'max:51200', 'mimes:jpg,jpeg,png,mp4'],
         ]);
-
-        $platforms = $validated['platforms'];
-        $needsImage = count(array_intersect($platforms, ['facebook', 'instagram'])) > 0;
-        $needsVideo = in_array('tiktok', $platforms, true);
-
-        if ($needsImage && $needsVideo) {
-            return back()
-                ->withInput()
-                ->withErrors(['media' => 'TikTok requires a video, but Facebook/Instagram require an image — a single upload can\'t satisfy both. Uncheck one of these platforms, or publish them separately.']);
-        }
-
-        if ($request->hasFile('media')) {
-            $mimeRule = match (true) {
-                $needsVideo => 'mimes:mp4',
-                $needsImage => 'mimes:jpg,jpeg,png',
-                default => 'mimes:jpg,jpeg,png,mp4',
-            };
-
-            $request->validate([
-                'media' => ['file', $mimeRule],
-            ]);
-        }
 
         $response = Http::withHeaders([
             'x-goog-api-key' => config('services.gemini.key'),
@@ -87,6 +53,7 @@ class PostIdeaController extends Controller
         }
 
         $rewritten = data_get($response->json(), 'candidates.0.content.parts.0.text', '');
+        $posts = $this->parsePosts($rewritten);
 
         $mediaPath = null;
         $mediaType = null;
@@ -99,8 +66,7 @@ class PostIdeaController extends Controller
 
         return back()
             ->withInput()
-            ->with('result', trim($rewritten))
-            ->with('platforms', $platforms)
+            ->with('posts', $posts)
             ->with('mediaPath', $mediaPath)
             ->with('mediaType', $mediaType);
     }
@@ -108,106 +74,103 @@ class PostIdeaController extends Controller
     public function postToBuffer(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'text' => ['required', 'string', 'max:280'],
-            'platforms' => ['required', 'array', 'min:1'],
-            'platforms.*' => ['in:facebook,instagram,tiktok,x'],
+            'posts' => ['required', 'array', 'min:1', 'max:25'],
+            'posts.*' => ['required', 'string', 'max:280'],
             'media_path' => ['nullable', 'string'],
             'media_type' => ['nullable', 'in:image,video'],
+            'schedule_choice' => ['required', 'in:now,later'],
+            'scheduled_at' => ['required_if:schedule_choice,later', 'nullable', 'date', 'after:now'],
         ]);
 
+        $posts = array_values($validated['posts']);
         $mediaPath = $validated['media_path'] ?? null;
         $mediaType = $validated['media_type'] ?? null;
+        $scheduledAt = $validated['schedule_choice'] === 'later' ? $validated['scheduled_at'] : null;
 
-        $assetUrl = null;
-        if ($mediaPath && config('services.buffer.public_media_url')) {
-            $assetUrl = rtrim(config('services.buffer.public_media_url'), '/').Storage::url($mediaPath);
+        $connection = $request->user()->bufferConnection;
+
+        if (! $connection || ! $connection->isConnected()) {
+            return redirect()
+                ->route('buffer.show')
+                ->with('bufferResult', '❌ Connect your X account before publishing.');
         }
 
-        $results = [];
+        $assets = [];
+        if ($mediaPath && config('services.buffer.public_media_url')) {
+            $assetUrl = rtrim(config('services.buffer.public_media_url'), '/').Storage::url($mediaPath);
+            $assets[] = $mediaType === 'video'
+                ? ['video' => ['url' => $assetUrl]]
+                : ['image' => ['url' => $assetUrl]];
+        }
 
-        foreach ($validated['platforms'] as $platform) {
-            $label = self::PLATFORM_LABELS[$platform];
+        $metadata = null;
+        if (count($posts) > 1) {
+            $metadata = [
+                'twitter' => [
+                    'thread' => array_map(
+                        fn (string $text) => ['text' => $text, 'assets' => []],
+                        array_slice($posts, 1)
+                    ),
+                ],
+            ];
+        }
 
-            if (in_array($platform, self::MEDIA_REQUIRED_PLATFORMS, true) && ! $mediaPath) {
-                $results[] = "❌ {$label} requires an image or video — none uploaded.";
+        $result = (new BufferClient($connection->access_token))->createPost([
+            'text' => $posts[0],
+            'channelId' => $connection->channel_id,
+            'assets' => $assets,
+            'mode' => $scheduledAt ? 'customScheduled' : 'shareNow',
+            'dueAt' => $scheduledAt ? Carbon::parse($scheduledAt)->toIso8601String() : null,
+            'metadata' => $metadata,
+        ]);
 
-                continue;
-            }
-
-            $channelId = config("services.buffer.channels.{$platform}");
-
-            if (! $channelId) {
-                $results[] = "❌ {$label} channel not connected in Buffer.";
-
-                continue;
-            }
-
-            $assets = [];
-            if ($assetUrl) {
-                $assets[] = $mediaType === 'video'
-                    ? ['video' => ['url' => $assetUrl]]
-                    : ['image' => ['url' => $assetUrl]];
-            }
-
-            $mutation = <<<'GQL'
-            mutation CreatePost($text: String!, $channelId: ChannelId!, $assets: [AssetInput!]!) {
-              createPost(input: {
-                text: $text
-                channelId: $channelId
-                schedulingType: automatic
-                mode: shareNow
-                needsApproval: false
-                assets: $assets
-              }) {
-                ... on PostActionSuccess {
-                  post { id status }
-                }
-                ... on MutationError {
-                  message
-                }
-              }
-            }
-            GQL;
-
-            $response = Http::withToken(config('services.buffer.token'))
-                ->post('https://api.buffer.com', [
-                    'query' => $mutation,
-                    'variables' => [
-                        'text' => $validated['text'],
-                        'channelId' => $channelId,
-                        'assets' => $assets,
-                    ],
-                ]);
-
-            $errorMessage = $response->json('errors.0.message')
-                ?? data_get($response->json(), 'data.createPost.message');
-
-            if ($response->failed() || $errorMessage) {
-                $results[] = "❌ {$label}: ".($errorMessage ?? $response->body());
-
-                continue;
-            }
-
-            $results[] = "✅ Posted to {$label}.";
+        if (! $result['success']) {
+            $bufferResult = '❌ '.$result['error'];
+        } else {
+            $label = count($posts) > 1 ? 'thread ('.count($posts).' posts)' : 'post';
+            $bufferResult = $scheduledAt
+                ? "✅ Scheduled {$label} for ".Carbon::parse($scheduledAt)->format('M j, Y g:i A').'.'
+                : "✅ Posted {$label} to X.";
         }
 
         return back()
-            ->with('result', $validated['text'])
-            ->with('platforms', $validated['platforms'])
+            ->with('posts', $posts)
             ->with('mediaPath', $mediaPath)
             ->with('mediaType', $mediaType)
-            ->with('bufferResults', $results);
+            ->with('bufferResult', $bufferResult);
     }
 
     private function prompt(string $idea): string
     {
         return <<<PROMPT
-        Rewrite the following rough idea as a single punchy, engaging post for X (Twitter).
-        Keep it under 280 characters. No hashtags unless essential. No surrounding quotation marks.
-        Return only the rewritten post text, nothing else.
+        Rewrite the following rough idea as one or more punchy, engaging posts for X (Twitter).
+        Each post must stay under 280 characters. No hashtags unless essential. No surrounding quotation marks.
+
+        If the idea fits naturally in a single post, return exactly one. If it's substantial enough to
+        benefit from a thread, break it into multiple connected posts that each stand well on their own
+        but flow into the next. When there is more than one post, prefix each with its position like "1/3".
+
+        Respond with ONLY valid JSON in this exact shape, no markdown code fences, nothing else:
+        {"posts": ["first post text", "second post text"]}
 
         Idea: {$idea}
         PROMPT;
+    }
+
+    private function parsePosts(string $raw): array
+    {
+        $cleaned = trim(preg_replace('/^```(?:json)?\s*|\s*```$/', '', trim($raw)));
+        $decoded = json_decode($cleaned, true);
+
+        if (is_array($decoded) && ! empty($decoded['posts']) && is_array($decoded['posts'])) {
+            $posts = array_values(array_filter(array_map('trim', $decoded['posts'])));
+
+            if (! empty($posts)) {
+                return $posts;
+            }
+        }
+
+        return [trim($raw)];
     }
 
     private function model(): string
