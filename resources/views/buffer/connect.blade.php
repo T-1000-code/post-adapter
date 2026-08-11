@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Connect X — Post Idea Rewriter</title>
+    <title>Connect Accounts — Post Idea Rewriter</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
@@ -66,7 +66,7 @@
 </head>
 <body>
     <p class="back"><a href="{{ route('post-idea.create') }}">&larr; Back to post idea rewriter</a></p>
-    <h1>Connect your X account</h1>
+    <h1>Connect your Buffer accounts</h1>
 
     @if (session('status'))
         <div class="status"><p>{{ session('status') }}</p></div>
@@ -80,47 +80,40 @@
         </div>
     @endif
 
-    @if ($connection && $connection->isConnected())
+    @if ($connection)
         <div class="connected">
-            <p>✅ Connected to X channel <strong>{{ $connection->channel_name }}</strong>.</p>
+            @foreach ($services as $service => $label)
+                @if ($connection->isConnected($service))
+                    <p>✅ {{ $label }}: <strong>{{ $connection->channelFor($service)->channel_name }}</strong></p>
+                @else
+                    <p>⚠️ {{ $label }}: not connected yet — connect it on Buffer, then refresh.</p>
+                @endif
+            @endforeach
         </div>
 
+        <a href="https://buffer.com" target="_blank" rel="noopener">
+            <button type="button" class="secondary">Open Buffer</button>
+        </a>
         <form method="POST" action="{{ route('buffer.refresh') }}">
             @csrf
-            <button type="submit" class="secondary">Refresh</button>
+            <button type="submit">Refresh</button>
         </form>
         <form method="POST" action="{{ route('buffer.disconnect') }}">
             @csrf
             <button type="submit" class="danger">Disconnect</button>
         </form>
     @else
-        @if ($connection)
-            <p>A Buffer token is saved, but no connected X channel was found on it yet.</p>
-            <p>1. Open Buffer and connect your X account there, then come back and refresh.</p>
-            <a href="https://buffer.com" target="_blank" rel="noopener">
-                <button type="button" class="secondary">Open Buffer to connect X</button>
-            </a>
-            <form method="POST" action="{{ route('buffer.refresh') }}">
-                @csrf
-                <button type="submit">I've connected it — refresh</button>
-            </form>
-            <form method="POST" action="{{ route('buffer.disconnect') }}">
-                @csrf
-                <button type="submit" class="danger">Remove token</button>
-            </form>
-        @else
-            <p>Paste a personal Buffer API token to connect. Buffer doesn't yet support signing in directly from
-            other apps, so this is the closest thing available today.</p>
+        <p>Paste a personal Buffer API token to connect. Buffer doesn't yet support signing in directly from
+        other apps, so this is the closest thing available today.</p>
 
-            <form method="POST" action="{{ route('buffer.save-token') }}">
-                @csrf
-                <label for="access_token">Buffer API token</label>
-                <input type="password" name="access_token" id="access_token" required autofocus>
-                <p class="help">Find yours at <a href="https://buffer.com/app/settings/api" target="_blank" rel="noopener">Buffer &rarr; Settings &rarr; API</a>. If X isn't connected to your Buffer account yet, connect it there first.</p>
+        <form method="POST" action="{{ route('buffer.save-token') }}">
+            @csrf
+            <label for="access_token">Buffer API token</label>
+            <input type="password" name="access_token" id="access_token" required autofocus>
+            <p class="help">Find yours at <a href="https://buffer.com/app/settings/api" target="_blank" rel="noopener">Buffer &rarr; Settings &rarr; API</a>. Connect X and/or Facebook to your Buffer account first (or come back and refresh after you do).</p>
 
-                <button type="submit">Save token</button>
-            </form>
-        @endif
+            <button type="submit">Save token</button>
+        </form>
     @endif
 </body>
 </html>

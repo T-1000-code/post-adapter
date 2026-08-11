@@ -11,11 +11,11 @@ class BufferClient
     }
 
     /**
-     * Look up the caller's connected X (Twitter) channel, if any.
+     * Look up the caller's connected channels, keyed by service (e.g. "twitter", "facebook").
      *
-     * @return array{id: string, name: string}|null
+     * @return array<string, array{id: string, name: string}>
      */
-    public function findTwitterChannel(): ?array
+    public function findChannels(): array
     {
         $accountQuery = <<<'GQL'
         query {
@@ -29,7 +29,7 @@ class BufferClient
         $organizationId = data_get($accountResponse->json(), 'data.account.organizations.0.id');
 
         if ($accountResponse->failed() || ! $organizationId) {
-            return null;
+            return [];
         }
 
         $channelsQuery = <<<'GQL'
@@ -45,13 +45,15 @@ class BufferClient
         $channelsResponse = $this->request($channelsQuery, ['organizationId' => $organizationId]);
         $channels = data_get($channelsResponse->json(), 'data.channels', []);
 
+        $bySer = [];
         foreach ($channels as $channel) {
-            if (($channel['service'] ?? null) === 'twitter') {
-                return ['id' => $channel['id'], 'name' => $channel['name']];
+            $service = $channel['service'] ?? null;
+            if (in_array($service, ['twitter', 'facebook'], true)) {
+                $bySer[$service] = ['id' => $channel['id'], 'name' => $channel['name']];
             }
         }
 
-        return null;
+        return $bySer;
     }
 
     /**

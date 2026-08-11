@@ -83,6 +83,7 @@
             padding: 1rem;
             background: #f3f4f6;
             border-radius: 8px;
+            white-space: pre-line;
         }
         .media-note {
             margin-top: 0.5rem;
@@ -115,10 +116,16 @@
     <div class="account-bar">
         <span>
             {{ auth()->user()->email }} &middot;
-            @if ($bufferConnection && $bufferConnection->isConnected())
-                <a href="{{ route('buffer.show') }}">X: {{ $bufferConnection->channel_name }}</a>
+            @if ($bufferConnection && $bufferConnection->isConnected('twitter'))
+                <a href="{{ route('buffer.show') }}">X: {{ $bufferConnection->channelFor('twitter')->channel_name }}</a>
             @else
                 <a href="{{ route('buffer.show') }}" class="connect-warn">Connect your X account</a>
+            @endif
+            &middot;
+            @if ($bufferConnection && $bufferConnection->isConnected('facebook'))
+                <a href="{{ route('buffer.show') }}">Facebook: {{ $bufferConnection->channelFor('facebook')->channel_name }}</a>
+            @else
+                <a href="{{ route('buffer.show') }}" class="connect-warn">Connect Facebook</a>
             @endif
         </span>
         <form method="POST" action="{{ route('logout') }}">
@@ -192,6 +199,15 @@
             @error('scheduled_at')
                 <div class="errors"><p>{{ $message }}</p></div>
             @enderror
+
+            @if ($bufferConnection && $bufferConnection->isConnected('facebook'))
+                <div class="schedule-field">
+                    <label>
+                        <input type="checkbox" name="post_to_facebook" value="1">
+                        Also post to Facebook ({{ $bufferConnection->channelFor('facebook')->channel_name }})
+                    </label>
+                </div>
+            @endif
 
             <button type="submit" class="buffer-btn">{{ count($posts) > 1 ? 'Post thread to X via Buffer' : 'Post to X via Buffer' }}</button>
         </form>

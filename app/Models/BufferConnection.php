@@ -5,8 +5,9 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['user_id', 'access_token', 'channel_id', 'channel_name'])]
+#[Fillable(['user_id', 'access_token'])]
 class BufferConnection extends Model
 {
     protected function casts(): array
@@ -21,8 +22,18 @@ class BufferConnection extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function isConnected(): bool
+    public function channels(): HasMany
     {
-        return ! is_null($this->channel_id);
+        return $this->hasMany(BufferChannel::class);
+    }
+
+    public function channelFor(string $service): ?BufferChannel
+    {
+        return $this->channels->firstWhere('service', $service);
+    }
+
+    public function isConnected(string $service = 'twitter'): bool
+    {
+        return ! is_null($this->channelFor($service));
     }
 }

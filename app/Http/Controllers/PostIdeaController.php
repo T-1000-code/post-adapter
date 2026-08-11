@@ -80,6 +80,7 @@ class PostIdeaController extends Controller
             'media_type' => ['nullable', 'in:image,video'],
             'schedule_choice' => ['required', 'in:now,later'],
             'scheduled_at' => ['required_if:schedule_choice,later', 'nullable', 'date', 'after:now'],
+            'post_to_facebook' => ['nullable', 'boolean'],
         ]);
 
         $posts = array_values($validated['posts']);
@@ -89,7 +90,7 @@ class PostIdeaController extends Controller
 
         $connection = $request->user()->bufferConnection;
 
-        if (! $connection || ! $connection->isConnected()) {
+        if (! $connection || ! $connection->isConnected('twitter')) {
             return redirect()
                 ->route('buffer.show')
                 ->with('bufferResult', '❌ Connect your X account before publishing.');
@@ -103,6 +104,10 @@ class PostIdeaController extends Controller
                 : ['image' => ['url' => $assetUrl]];
         }
 
+        $mode = $scheduledAt ? 'customScheduled' : 'shareNow';
+        $dueAt = $scheduledAt ? Carbon::parse($scheduledAt)->toIso8601String() : null;
+        $client = new BufferClient($connection->access_token);
+
         $metadata = null;
         if (count($posts) > 1) {
             $metadata = [
@@ -115,29 +120,56 @@ class PostIdeaController extends Controller
             ];
         }
 
-        $result = (new BufferClient($connection->access_token))->createPost([
+        $result = $client->createPost([
             'text' => $posts[0],
-            'channelId' => $connection->channel_id,
+            'channelId' => $connection->channelFor('twitter')->channel_id,
             'assets' => $assets,
-            'mode' => $scheduledAt ? 'customScheduled' : 'shareNow',
-            'dueAt' => $scheduledAt ? Carbon::parse($scheduledAt)->toIso8601String() : null,
+            'mode' => $mode,
+            'dueAt' => $dueAt,
             'metadata' => $metadata,
         ]);
 
-        if (! $result['success']) {
-            $bufferResult = '❌ '.$result['error'];
-        } else {
-            $label = count($posts) > 1 ? 'thread ('.count($posts).' posts)' : 'post';
-            $bufferResult = $scheduledAt
-                ? "✅ Scheduled {$label} for ".Carbon::parse($scheduledAt)->format('M j, Y g:i A').'.'
-                : "✅ Posted {$label} to X.";
+        $label = count($posts) > 1 ? 'thread ('.count($posts).' posts)' : 'post';
+        $messages = [$this->resultMessage($result, 'X', $label, $scheduledAt)];
+
+        if ($request->boolean('post_to_facebook')) {
+            $facebookChannel = $connection->channelFor('facebook');
+
+            if (! $facebookChannel) {
+                $messages[] = '❌ Facebook: not connected.';
+            } else {
+                $facebookResult = $client->createPost([
+                    'text' => implode("\n\n", $posts),
+                    'channelId' => $facebookChannel->channel_id,
+                    'assets' => $assets,
+                    'mode' => $mode,
+                    'dueAt' => $dueAt,
+                    'metadata' => null,
+                ]);
+
+                $messages[] = $this->resultMessage($facebookResult, 'Facebook', 'post', $scheduledAt);
+            }
         }
 
         return back()
             ->with('posts', $posts)
             ->with('mediaPath', $mediaPath)
             ->with('mediaType', $mediaType)
-            ->with('bufferResult', $bufferResult);
+            ->with('bufferResult', implode("\n", $messages));
+    }
+
+    /**
+     * @param  array{success: bool, error: ?string}  $result
+     */
+    private function resultMessage(array $result, string $platform, string $label, ?string $scheduledAt): string
+    {
+        if (! $result['success']) {
+            return "❌ {$platform}: ".$result['error'];
+        }
+
+        return $scheduledAt
+            ? "✅ {$platform}: scheduled {$label} for ".Carbon::parse($scheduledAt)->format('M j, Y g:i A').'.'
+            : "✅ {$platform}: posted {$label}.";
     }
 
     private function prompt(string $idea): string
